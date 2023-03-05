@@ -25,5 +25,6 @@ int main() {
 	}
 	
 	json_value_dump_tree(root, 0);
+	json_value_release_tree(root);
 	return 0;
 }

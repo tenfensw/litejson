@@ -379,13 +379,37 @@ json_value_ref json_value_get_last(json_value_ref first) {
 //
 
 void json_value_release_tree(json_value_ref value) {
-	// TODO
-	(void)(value);
+	if (!value)
+		return;
+		
+	ljprintf("value <%p> type = %u awaiting release (tree)", value, value->type);
+	
+	// cache referenced values first
+	json_value_ref child = value->child;
+	json_value_ref next = value->next;
+	
+	// release itself
+	json_value_release(value);
+	
+	// release all referenced children
+	json_value_release_tree(child);
+	// release all referenced neighboring items
+	json_value_release_tree(next);
 }
 
 void json_value_release(json_value_ref value) {
-	// TODO
-	(void)(value);
+	if (!value)
+		return;
+	
+	ljprintf("value <%p> type = %u key = \"%s\" awaiting release", 
+			 value, value->type, value->strV);
+	
+	// release the only few manually managed values
+	free(value->key);
+	free(value->strV);
+	
+	// release itself
+	free(value);
 }
 
 void json_value_dump_tree(json_value_ref value, const json_index_t offset) {
