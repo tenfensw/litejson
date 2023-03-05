@@ -9,7 +9,9 @@
 //
 
 #define LJ_ERROR_CHARMAX 512
+
 #define LJ_STRINGOPS_BUFSTEP 20
+#define LJ_STRINGOPS_JSONTOK '\r'
 
 #ifdef LJ_DEBUG_ALLOW_COLORS
 #define LJ_PRINTF_DEBUG "\033[96m"
@@ -118,6 +120,9 @@ json_error json_error_make(const json_index_t line,
 
 #define LJ_IS_CONTAINER(obj) (obj->type == JSON_TYPE_ARRAY || \
 							  obj->type == JSON_TYPE_OBJECT)
+
+#define LJ_IS_JSONTOK(current) \
+	(isspace(current) != 0 || current == ']' || current == '}' || current == ',')
 			
 #define LJ_INIT_EMPTY_OBJ(newObj) \
 json_value_ref newObj = ljmalloc_s(json_value_s); \
@@ -169,6 +174,8 @@ json_index_t lj_substring_until(const char* input, const char delim1,
 	
 	// if true, then we were preceded by a '\\'
 	bool insideEscape = false;
+	// if true, we are in double quotes (ignored without respectQuotes)
+	bool insideQuotes = false;
 		
 	for (json_index_t index = 0; index < strlen(input); index++) {
 		char current = input[index];
@@ -203,14 +210,21 @@ json_index_t lj_substring_until(const char* input, const char delim1,
 		} else if (current == '\\') {
 			insideEscape = true;
 			continue;
-		} else if (current == delim1 || current == delim2)
-			break; // found 'em
-		else {
-			result[resultLength++] = current;
-			result[resultLength] = '\0';
-			
-			insideEscape = false;
+		} else if (current == '"' && respectQuotes)
+			insideQuotes = !insideQuotes;
+		
+		if (!insideQuotes) {
+			if (current == delim1 || current == delim2)
+				break; // found 'em
+			else if (delim1 == LJ_STRINGOPS_JSONTOK && 
+					 LJ_IS_JSONTOK(current))
+				break;
 		}
+		
+		result[resultLength++] = current;
+		result[resultLength] = '\0';
+			
+		insideEscape = false;
 	}
 	
 	if (resultP)
@@ -383,7 +397,45 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 				LJ_ADAPT_OBJ_PARENT(newObj)
 				value = newObj;
 			} else {
-				// TODO
+				// TODO: support arrays
+			
+				// need to read till the end first
+				
+				char* token = NULL;
+				json_index_t tokenLength = lj_substring_until(input + index, LJ_STRINGOPS_JSONTOK, '\0', &token, true);
+				
+				index += tokenLength + 1;
+				
+				ljprintf("found a (yet) undefined token = \"%s\", length = %u", token, tokenLength);
+				
+				LJ_INIT_EMPTY_OBJ(newObj)
+				
+				if (strcmp(token, "null") == 0) {
+					// a null value, add a placeholder string value and
+					// move on
+					newObj->strV = ljmalloc(sizeof(char));
+					free(token);
+				} else if (ljisdigit_str(token)) {
+					// a numeric value
+					newObj->type = JSON_TYPE_NUMBER;
+					newObj->strV = token;
+					newObj->numV = ljatof(token);
+				} else if (strcmp(token, "true") == 0 || 
+						   strcmp(token, "false") == 0) {
+					// a boolean value
+					newObj->type = JSON_TYPE_BOOLEAN;
+					newObj->strV = token;
+					newObj->numV = (strcmp(token, "true") == 0);
+				} else {
+					free(token); // quick clean up
+				
+					json_value_release(newObj);
+					LJ_ERROR("Expected a valid JSON value, got '%c' token", current);
+				} 
+				
+				// adapt parent attributes correctly
+				LJ_ADAPT_OBJ_PARENT(newObj)
+				value = newObj;
 			}
 		}
 		
@@ -450,6 +502,9 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 			// time of recursive parsing
 			json_error adaptedError;
 			json_value_ref newObj = json_parse(valueRaw, &adaptedError);
+			
+			// avoid memory leaks and clean up a bit
+			free(valueRaw);
 			
 			if (adaptedError.fail) {
 				// first adapt error report values to proper ones
