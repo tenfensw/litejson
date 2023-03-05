@@ -159,7 +159,7 @@ typedef enum {
 json_index_t lj_substring_until(const char* input, const char delim1,
 								const char delim2, char** resultP,
 								const bool respectQuotes) {
-	if (!input || strlen(input) < 2 || delim1 == '\0') {
+	if (!input || strlen(input) < 1 || delim1 == '\0') {
 		// need to have at least one delimiter specified
 		ljprintf("input = \"%s\", while delim1 = %d, cannot continue", 
 				 input, (int8_t)delim1);
@@ -315,7 +315,7 @@ void json_value_dump_tree(json_value_ref value, const json_index_t offset) {
 }
 
 json_value_ref json_parse(const char* input, json_error* errorP) {
-	if (!input || strlen(input) < 2) {
+	if (!input || strlen(input) < 1) {
 		// don't bother parsing empty strings
 		
 		LJ_IF_NOT_NULL(errorP, json_error_make(0, 0, "NULL or empty string provided as input"));
@@ -463,11 +463,14 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 				state = JSON_STATE_VALUE;
 			} else if (current == '}') {
 				// the end of this object
+				ljprintf("reached } at %u", current);
 				
 				if (!value)
 					LJ_ERROR("Stray object end token")
 				
 				if (value->parent) {
+					ljprintf("going up one level");
+				
 					// go up
 					value = value->parent;
 					
