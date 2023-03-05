@@ -8,9 +8,14 @@
 // private
 //
 
+/// max length of json_error.message field
 #define LJ_ERROR_CHARMAX 512
 
+/// internally-used base size for automatically extendable C 
+/// string buffers
 #define LJ_STRINGOPS_BUFSTEP 20
+/// const parameter that is used as a "sign" to lj_substring_until to
+/// use a common set of JSON token delimiters as its border
 #define LJ_STRINGOPS_JSONTOK '\r'
 
 #ifdef LJ_DEBUG_ALLOW_COLORS
@@ -67,6 +72,10 @@ void ljprintf(const char* fn, const json_index_t line, const char* fc,
 #endif
 }
 
+///
+/// internally-used debug printf function - release builds do not produce
+/// any debug output
+///
 #define ljprintf(...) ljprintf(__FILE__, __LINE__, __FUNCTION__, \
 							   __VA_ARGS__)
 
@@ -81,8 +90,13 @@ void* ljmalloc(const json_index_t size) {
 	return result;
 }
 
+/// convenience wrapper for zero malloc-ing new struct instances
 #define ljmalloc_s(nm) ljmalloc(sizeof(struct nm))
 
+///
+/// creates a new instance of the json_error structure with the provided
+/// data being saved
+///
 json_error json_error_make(const json_index_t line,
 						   const json_index_t character,
 						   const char* msgF,
@@ -108,12 +122,14 @@ json_error json_error_make(const json_index_t line,
 	return result;
 }
 
+/// sets *p1 to p2 if p1 is a valid pointer
 #define LJ_IF_NOT_NULL(p1, p2) \
 { \
 	if (p1) \
 		(*p1) = p2; \
 }
 
+/// cleans up json_parse-related vars and throws a parsing error
 #define LJ_ERROR(...) \
 { \
 	if (value) \
@@ -125,9 +141,11 @@ json_error json_error_make(const json_index_t line,
 #define LJ_IS_CONTAINER(obj) (obj->type == JSON_TYPE_ARRAY || \
 							  obj->type == JSON_TYPE_OBJECT)
 
+/// checks if the specified character is a JSON delimiter token
 #define LJ_IS_JSONTOK(current) \
 	(isspace(current) != 0 || current == ']' || current == '}' || current == ',')
 			
+/// [json_parse only] convenience macro to setup a new empty json_value_ref
 #define LJ_INIT_EMPTY_OBJ(newObj) \
 json_value_ref newObj = ljmalloc_s(json_value_s); \
 \
@@ -156,6 +174,12 @@ if (!root) \
 	} \
 }
 
+///
+/// [json_parse] if we are a child item inside a container and we encounter
+/// a token meant to close that container, we need to jump to our parent
+/// container first and only then continue with closing it (jumping to its
+/// parent)
+///
 #define LJ_JUMP_TO_CHILDS_PARENT_MULTI(value, pType) \
 { \
 	if (value && value->type != pType && \
@@ -167,6 +191,10 @@ if (!root) \
 	} \
 }
 
+///
+/// [json_parse] adjust the state machine after jumping to the container's
+/// parent
+///
 #define LJ_CLOSE_AND_JUMP_TO_PARENT(value) \
 { \
 	if (value->parent) { \
@@ -197,6 +225,12 @@ typedef enum {
 	JSON_STATE_ARRAY = 80
 } json_parse_state_t;
 
+///
+/// makes a substring at *resultP and returns its length. delim1 and delim2
+/// are parameters signifying the stop characters to look for while going through
+/// the main string. If respectQuotes is specified, then those stop characters
+/// are ignored when wrapped around in doublequotes
+///
 json_index_t lj_substring_until(const char* input, const char delim1,
 								const char delim2, char** resultP,
 								const bool respectQuotes) {
@@ -276,6 +310,10 @@ json_index_t lj_substring_until(const char* input, const char delim1,
 	return resultLength;
 }
 
+///
+/// strips all isspace() conforming characters from the specified C string's
+/// ending
+///
 void lj_substring_strip_right(char* input) {
 	if (!input)
 		return;

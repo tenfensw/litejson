@@ -40,9 +40,17 @@ typedef struct {
 	char* message;
 } json_error;
 
+///
+/// parses the specified C string containing a valid JSON document and returns
+/// the root container containing all the other values. On error, *errorP is 
+/// set to an instance of json_error explaining what went wrong and NULL is 
+/// returned
+///
 json_value_ref json_parse(const char* input, json_error* errorP);
 
 void json_value_dump_tree(json_value_ref value, const json_index_t offset);
 
+/// releases the specified JSON value object and all of its affiliate values
 void json_value_release_tree(json_value_ref value);
+/// releases just the specified JSON value object
 void json_value_release(json_value_ref value);
