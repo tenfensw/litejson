@@ -529,6 +529,11 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 			// adapt object parent
 			LJ_ADAPT_OBJ_PARENT(newObj)
 			value = newObj;
+			
+			if (value->parent && value->parent->type == JSON_TYPE_OBJECT) {
+				ljprintf("state changed -> key");
+				state = JSON_STATE_KEY;
+			}
 		}
 	}
 	

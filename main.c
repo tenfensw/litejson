@@ -9,7 +9,7 @@ void gen_pointing_arrow(const json_index_t offset) {
 }
 
 int main() {
-	const char* input = "{ \"hello\": 123 }";
+	const char* input = "{ \"hello\": null, \"world\": \"aboba\" }";
 	
 	json_error result;
 	json_value_ref root = json_parse(input, &result);
