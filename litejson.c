@@ -156,12 +156,45 @@ if (!root) \
 	} \
 }
 
+#define LJ_JUMP_TO_CHILDS_PARENT_MULTI(value, pType) \
+{ \
+	if (value && value->type != pType && \
+		value->parent && value->parent->type == pType) { \
+		\
+		ljprintf("additional level up from %p to %p, type %u -> %u", \
+				 value, value->parent, value->type, pType); \
+		value = value->parent; \
+	} \
+}
+
+#define LJ_CLOSE_AND_JUMP_TO_PARENT(value) \
+{ \
+	if (value->parent) { \
+		ljprintf("%s going up one level from %p to %p %s", \
+				 LJ_PRINTF_GREEN, value, value->parent, LJ_PRINTF_RESET); \
+		\
+		value = value->parent; \
+		\
+		if (value->type == JSON_TYPE_OBJECT) \
+			state = JSON_STATE_KEY; \
+		else if (value->type == JSON_TYPE_ARRAY) \
+			state = JSON_STATE_ARRAY; \
+		else \
+			state = JSON_STATE_KEY; \
+	} else { \
+		ljprintf("de facto end of file reached, saying goodbyes and finishing up"); \
+		break; \
+	} \
+}
+
 /// internally-used parsing state machine
 typedef enum {
 	JSON_STATE_OUTSIDE = 0,
 	
 	JSON_STATE_KEY = 90,
-	JSON_STATE_VALUE = 91
+	JSON_STATE_VALUE = 91,
+	
+	JSON_STATE_ARRAY = 80
 } json_parse_state_t;
 
 json_index_t lj_substring_until(const char* input, const char delim1,
@@ -389,27 +422,48 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 		
 		ljprintf("current = '%c', index = %u", current, index);
 		
-		if (current == '{' && state != JSON_STATE_KEY) {
-			// looks like we are going deeper and are starting an object
-			ljprintf("handled: new object {} (state = %u)", state);
+		if (state != JSON_STATE_KEY) {
+			if (current == '{') {
+				// looks like we are going deeper and are starting an object
+				ljprintf("handled: new object {} (state = %u)", state);
+				
+				LJ_INIT_EMPTY_OBJ(newObj)
 			
-			LJ_INIT_EMPTY_OBJ(newObj)
+				newObj->type = JSON_TYPE_OBJECT;
+				newObj->parent = value;
 			
-			newObj->type = JSON_TYPE_OBJECT;
-			newObj->parent = value;
+				// adapt parent attributes correctly
+				LJ_ADAPT_OBJ_PARENT(newObj)
+				value = newObj;
 			
-			// adapt parent attributes correctly
-			LJ_ADAPT_OBJ_PARENT(newObj)
-			value = newObj;
+				ljprintf("state change -> key (new object)");
+				state = JSON_STATE_KEY;
 			
-			ljprintf("state change -> key (new object)");
-			state = JSON_STATE_KEY;
-			
-			ljprintf("%s enter new object from %p to %p %s", 
-					 LJ_PRINTF_GREEN, value->parent, value, LJ_PRINTF_RESET);
-			
-			continue;
-		} else if (state == JSON_STATE_OUTSIDE) {
+				ljprintf("%s enter new object from %p to %p %s", 
+						 LJ_PRINTF_GREEN, value->parent, value, LJ_PRINTF_RESET);
+				continue;
+			} else if (current == '[') {
+				ljprintf("handled: new array [] (state = %u)", state);
+				
+				LJ_INIT_EMPTY_OBJ(newObj)
+				
+				newObj->type = JSON_TYPE_ARRAY;
+				
+				// adapt parent attributes correctly
+				LJ_ADAPT_OBJ_PARENT(newObj)
+				value = newObj;
+				
+				ljprintf("state change -> array (new array)");
+				state = JSON_STATE_ARRAY;
+				
+				ljprintf("%s enter new array from %p to %p %s", 
+						 LJ_PRINTF_GREEN, value->parent, value, LJ_PRINTF_RESET);
+				continue;
+			}
+		}
+		
+		if (state == JSON_STATE_OUTSIDE) {
+			// TODO: support arrays
 			ljprintf("handled: outside");
 		
 			if (current == '"') {
@@ -436,8 +490,6 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 				LJ_ADAPT_OBJ_PARENT(newObj)
 				value = newObj;
 			} else {
-				// TODO: support arrays
-			
 				// need to read till the end first
 				
 				char* token = NULL;
@@ -510,44 +562,49 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 				// the end of this object
 				ljprintf("reached } at %u", current);
 				
-				if (value && value->type != JSON_TYPE_OBJECT &&
-					value->parent && value->parent->type == JSON_TYPE_OBJECT) {
-					// we are a child object, so we need to go up to our parent
-					
-					ljprintf("additional level up from %p to %p, type %u -> {}",
-							 value, value->parent, value->type);
-					value = value->parent;
-				}
+				// if we are a child item, we need to first reach out parent
+				// container to close it
+				LJ_JUMP_TO_CHILDS_PARENT_MULTI(value, JSON_TYPE_OBJECT)
 				
 				if (!value)
 					LJ_ERROR("Stray object end token")
 				
-				if (value->parent) {
-					ljprintf("%s going up one level from %p to %p %s", 
-							 LJ_PRINTF_GREEN, value, value->parent, LJ_PRINTF_RESET);
-							 
-					// go up
-					value = value->parent;
-					
-					if (value->type != JSON_TYPE_OBJECT)
-						state = JSON_STATE_OUTSIDE;
-					else
-						state = JSON_STATE_KEY;
-				} else {
-					ljprintf("de facto end of file reached, saying goodbyes and finishing up");
-					break;
-				}
+				LJ_CLOSE_AND_JUMP_TO_PARENT(value)
 					
 				ljprintf("state change -> %u", state);
 			} else
 				LJ_ERROR("Expected key, got '%c' instead", current);
-		} else if (state == JSON_STATE_VALUE) {
+		} else if (state == JSON_STATE_VALUE || state == JSON_STATE_ARRAY) {
 			// found value, need to get its raw string and then recursively parse
 			// it
 			ljprintf("handled: object state -> value");
+					 
+			const char ending = (state == JSON_STATE_ARRAY) ? ']' : '}';
+			ljprintf("recognized ending - '%c'", ending);
+			
+			// handle array ending correctly
+			if (state == JSON_STATE_ARRAY) {
+				if (current == ',') {
+					// array comma jump
+					ljprintf("array comma jump");
+					continue;
+				} else if (current == ']') {
+					ljprintf("reached the closing bracket ] at %u", index);
+					
+					LJ_JUMP_TO_CHILDS_PARENT_MULTI(value, JSON_TYPE_ARRAY)
+				
+					if (!value)
+						LJ_ERROR("Stray array end token")
+				
+					LJ_CLOSE_AND_JUMP_TO_PARENT(value)
+					
+					ljprintf("state change -> %u", state);
+					continue;
+				}
+			}
 			
 			char* valueRaw = NULL;
-			json_index_t valueRawLength = lj_substring_until(input + index, ',', '}', &valueRaw, false);
+			json_index_t valueRawLength = lj_substring_until(input + index, ',', ending, &valueRaw, false);
 			
 			if (!valueRaw)
 				LJ_ERROR("Expected value, got nothing")
