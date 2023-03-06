@@ -5,6 +5,8 @@ AR ?= ar
 
 ifndef RELEASE
 CFLAGS := -g $(CFLAGS) -DDEBUG=1 -DLJ_DEBUG_ALLOW_COLORS=1
+else
+CFLAGS := -Os $(CFLAGS)
 endif
 
 TARGET = litejson
