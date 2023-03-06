@@ -1034,7 +1034,7 @@ bool json_value_set_boolean(json_value_ref value, const bool bv) {
 	LJ_CLEAN_PREVIOUS_VALUE(value)
 	value->type = JSON_TYPE_BOOLEAN;
 	
-	value->strV = bv ? "true" : "false";
+	value->strV = bv ? strdup("true") : strdup("false");
 	value->numV = bv;
 	return true;
 }
@@ -1121,6 +1121,10 @@ bool json_value_set(const json_value_ref container, const char* key,
 		return false;
 	}
 	
+	// adjust soon-to-be-added value's key
+	free(value->key);
+	value->key = strdup(key);
+	
 	// get the last stored value if we have to append the new value
 	json_value_ref last = json_value_get_last(container);
 	
@@ -1129,6 +1133,11 @@ bool json_value_set(const json_value_ref container, const char* key,
 	json_value_ref found = json_value_find_by_key(container->child, key, &foundBack);
 	
 	if (found) {
+		ljprintf("found value, found = <%p>, key = \"%s\", type = %u",
+				 found, found->key, found->type);
+		ljprintf("foundBack = <%p>, key = \"%s\"", foundBack, 
+				 foundBack ? foundBack->key : "-");
+	
 		// will be editing an existing value
 		json_value_ref foundNext = found->next;
 		
@@ -1143,7 +1152,7 @@ bool json_value_set(const json_value_ref container, const char* key,
 			foundBack->next = value;
 		
 		if (container->child == found)
-			container->child = found;
+			container->child = value;
 	} else if (last)
 		last->next = value;
 	else
@@ -1151,6 +1160,26 @@ bool json_value_set(const json_value_ref container, const char* key,
 		
 	value->parent = container;
 	return true;
+}
+
+const char* json_value_get_string(const json_value_ref value) {
+	return (value ? value->strV : NULL);
+}
+
+json_number_t json_value_get_number(const json_value_ref value) {
+	return (value ? value->numV : 0);
+}
+
+bool json_value_get_boolean(const json_value_ref value) {
+	return (bool)(json_value_get_number(value));
+}
+
+const char* json_value_get_key(const json_value_ref value) {
+	return (value ? value->key : NULL);
+}
+
+json_type_t json_value_get_type(const json_value_ref value) {
+	return (value ? value->type : JSON_TYPE_NULL);
 }
 
 bool json_value_push(json_value_ref container, json_value_ref value) {
@@ -1192,7 +1221,7 @@ void json_value_release(json_value_ref value) {
 	if (!value)
 		return;
 	
-	ljprintf("value <%p> type = %u key = \"%s\" awaiting release", 
+	ljprintf("value <%p> type = %u strV = \"%s\" awaiting release", 
 			 value, value->type, value->strV);
 	
 	// release the only few manually managed values

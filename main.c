@@ -24,7 +24,23 @@ int main() {
 		return 1;
 	}
 	
-	char* repr = json_value_stringify(root, false);
+	printf("root count: %u\n", json_value_get_count(root));
+	
+	// change "world" value to a number
+	json_value_ref newWorldValue = json_value_init_number(5454);
+	json_value_set(root, "world", newWorldValue);
+	
+	// add a new "reviewed" value
+	json_value_ref reviewedValue = json_value_init_boolean(true);
+	json_value_set(root, "reviewed", reviewedValue);
+	
+	// get value at pos #2
+	json_value_ref positionTwo = json_value_get_at(root, 2);
+	printf("positionTwo = <%p>, key = \"%s\", type = %u\n",
+		   positionTwo, json_value_get_key(positionTwo),
+		   json_value_get_type(positionTwo));
+	
+	char* repr = json_value_stringify(root, true);
 	printf("repr:\n%s\n", repr);
 	
 	free(repr);
