@@ -5,7 +5,7 @@
 #include "litejson.h"
 
 //
-// private
+// common - private
 //
 
 /// max length of json_error.message field
@@ -14,9 +14,13 @@
 /// internally-used base size for automatically extendable C 
 /// string buffers
 #define LJ_STRINGOPS_BUFSTEP 20
+/// max length of ljftoa C string buffer
+#define LJ_STRINGOPS_NUMMAX 10
 /// const parameter that is used as a "sign" to lj_substring_until to
 /// use a common set of JSON token delimiters as its border
 #define LJ_STRINGOPS_JSONTOK '\r'
+/// JSON document generation soft tab size
+#define LJ_STRINGOPS_TABSIZE 3
 
 #ifdef LJ_DEBUG_ALLOW_COLORS
 #define LJ_PRINTF_ADDRESS "\033[93m"
@@ -92,6 +96,10 @@ void* ljmalloc(const json_index_t size) {
 
 /// convenience wrapper for zero malloc-ing new struct instances
 #define ljmalloc_s(nm) ljmalloc(sizeof(struct nm))
+
+//
+// json_parse - private
+//
 
 ///
 /// creates a new instance of the json_error structure with the provided
@@ -356,61 +364,9 @@ json_number_t ljatof(const char* input) {
 	return result;
 }
 
-/// checks if the specified object value stores the specified item in itself
-json_value_ref json_value_get_last(json_value_ref first) {
-	if (!first) {
-		ljprintf("NULL specified, stopping");
-		return NULL;
-	}
-	
-	json_value_ref result = first;
-	
-	if (LJ_IS_CONTAINER(first))
-		result = first->child; // use first child instead
-		
-	while (result->next)
-		result = result->next;
-		
-	return result;
-}
-
 //
-// public
+// json_parse - public
 //
-
-void json_value_release_tree(json_value_ref value) {
-	if (!value)
-		return;
-		
-	ljprintf("value <%p> type = %u awaiting release (tree)", value, value->type);
-	
-	// cache referenced values first
-	json_value_ref child = value->child;
-	json_value_ref next = value->next;
-	
-	// release itself
-	json_value_release(value);
-	
-	// release all referenced children
-	json_value_release_tree(child);
-	// release all referenced neighboring items
-	json_value_release_tree(next);
-}
-
-void json_value_release(json_value_ref value) {
-	if (!value)
-		return;
-	
-	ljprintf("value <%p> type = %u key = \"%s\" awaiting release", 
-			 value, value->type, value->strV);
-	
-	// release the only few manually managed values
-	free(value->key);
-	free(value->strV);
-	
-	// release itself
-	free(value);
-}
 
 void json_value_dump_tree(json_value_ref value, const json_index_t offset) {
 	if (!value)
@@ -525,7 +481,6 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 		}
 		
 		if (state == JSON_STATE_OUTSIDE) {
-			// TODO: support arrays
 			ljprintf("handled: outside");
 		
 			if (current == '"') {
@@ -718,4 +673,532 @@ json_value_ref json_parse(const char* input, json_error* errorP) {
 	}
 	
 	return root;
+}
+
+// undef all json_parse-related macros so that they won't be used in
+// other methods by accident
+#undef LJ_CLOSE_AND_JUMP_TO_PARENT
+#undef LJ_JUMP_TO_CHILDS_PARENT_MULTI
+#undef LJ_ADAPT_OBJ_PARENT
+#undef LJ_INIT_EMPTY_OBJ
+#undef LJ_ERROR
+
+//
+// json_value_ref API - private
+//
+
+json_value_ref json_value_init(const json_type_t type) {
+	json_value_ref result = ljmalloc_s(json_value_s);
+	result->type = type;
+	
+	return result;
+}
+
+#define LJ_CLEAN_PREVIOUS_VALUE(value) \
+{ \
+	free(value->strV); \
+	value->strV = NULL; \
+	\
+	if (LJ_IS_CONTAINER(value)) { \
+		json_value_release_tree(value->child); \
+		value->child = NULL; \
+	} \
+}
+
+/// double -> C string
+char* ljftoa(const json_number_t input) {
+	char* result = calloc(LJ_STRINGOPS_NUMMAX, sizeof(char));
+	
+	// TODO: optimize
+	int32_t forceRound = (int32_t)input;
+	
+	// if there are no numbers after the comma, read it as int32_t
+	if ((json_number_t)(forceRound) == input)
+		sprintf(result, "%d", forceRound);
+	else
+		sprintf(result, "%lf", input);
+		
+	return result;
+}
+
+json_value_ref json_value_get_neighbor(json_value_ref base,
+									   const json_index_t index,
+									   const bool justCount,
+									   json_index_t* countP) {
+	json_index_t count = 0;
+	json_value_ref current = base;
+	
+	while (current) {
+		if (!justCount && count == index)
+			return current; // the item we are looking for
+	
+		count++;
+		
+		if (justCount && !current->next)
+			break; // return the last item instead
+		
+		current = current->next;
+	}
+	
+	// save count
+	LJ_IF_NOT_NULL(countP, count)
+	return current;
+}
+
+json_value_ref json_value_find_by_key(json_value_ref base,
+									  const char* key,
+									  json_value_ref* previousP) {
+	if (!base || !key)
+		return NULL; // cannot start with NULL
+		
+	json_value_ref current = base;
+	json_value_ref previous = NULL;
+	
+	while (current) {
+		if (current->key && strcmp(current->key, key) == 0) {
+			// found the one
+			LJ_IF_NOT_NULL(previousP, previous)
+			return current;
+		}
+		
+		previous = current;
+		current = current->next;
+	}
+	
+	// not found
+	return NULL;
+}
+
+char* lj_unescape_str(const char* input) {
+	if (!input)
+		return NULL;
+
+	// TODO: optimize
+	json_index_t resultSize = strlen(input) * 2 + 2;
+	json_index_t resultLength = 1;
+	char* result = calloc(resultSize, sizeof(char));
+	
+	// begin the resulting string with a double-quote
+	result[0] = '"';
+	
+	for (json_index_t i = 0; i < strlen(input); i++) {
+		char current = input[i];
+		bool doEscape = false;
+		
+		switch (current) {
+			case '\\':
+			case '"': {
+				doEscape = true;
+				break;
+			}
+			case '\t': {
+				current = 't';
+				doEscape = true;
+				break;
+			}
+			case '\r': {
+				current = 'r';
+				doEscape = true;
+				break;
+			}
+			case '\n': {
+				current = 'n';
+				doEscape = true;
+				break;
+			}
+			default:
+				break;
+		}
+		
+		if (doEscape)
+			result[resultLength++] = '\\';
+		
+		result[resultLength++] = current;
+	}
+	
+	// don't forget to close the string
+	result[resultLength++] = '"';
+	return result;
+}
+
+#define LJ_AUTOREALLOC_IF_NEEDED(condition, result, resultLength, resultSize) \
+{ \
+	if ((resultLength + condition + 2) >= resultSize) { \
+		resultSize += condition + LJ_STRINGOPS_BUFSTEP; \
+		result = realloc(result, sizeof(char) * resultSize); \
+	} \
+}
+
+char* json_value_make_string_repr(const json_value_ref root,
+								  json_index_t* lengthP,
+								  const bool humanReadable,
+								  const json_index_t baseSpaceCount) {
+	// prepare resulting buffer
+	json_index_t resultSize = LJ_STRINGOPS_BUFSTEP;
+	json_index_t resultLength = 0;
+	char* result = calloc(resultSize, sizeof(char));
+	
+	// used in humanReadable mode - space count
+	json_index_t spaceCount = baseSpaceCount;
+	
+	if (LJ_IS_CONTAINER(root)) {
+		// add the container beginning token first
+		result[resultLength++] = (root->type == JSON_TYPE_ARRAY) ? '[' : '{';
+		LJ_AUTOREALLOC_IF_NEEDED(2, result, resultLength, resultSize)
+		
+		spaceCount += LJ_STRINGOPS_TABSIZE;
+		
+		// add a new line before listing container items
+		if (humanReadable)
+			result[resultLength++] = '\n';
+		
+		// iterate through each child and add its stringified form
+		json_value_ref child = root->child;
+		
+		while (child) {
+			if (humanReadable) {
+				// prepend the necessary spaces
+				LJ_AUTOREALLOC_IF_NEEDED(spaceCount + 1, result, resultLength, resultSize)
+				
+				for (json_index_t sc = 0; sc < spaceCount; sc++)
+					result[resultLength++] = ' ';
+			}
+		
+			if (root->type == JSON_TYPE_OBJECT) {
+				// need not to forget to add the keys
+				char* escapedKey = lj_unescape_str(child->key);
+				json_index_t escapedKeyLength = escapedKey ? strlen(escapedKey) : 0;
+				
+				ljprintf("escapedKey = %s", escapedKey);
+				
+				// allocate buffer space first
+				LJ_AUTOREALLOC_IF_NEEDED(escapedKeyLength + 3, result, resultLength, resultSize)
+				
+				if (escapedKeyLength > 0) {
+					// add the converted quoted key
+					strcat(result, escapedKey);
+					resultLength += escapedKeyLength;
+					
+					result[resultLength++] = ':';
+					
+					if (humanReadable)
+						result[resultLength++] = ' ';
+				}
+			}
+			
+			// convert the child object into a document representation too
+			json_index_t reprLength = 0;
+			char* repr = json_value_make_string_repr(child, &reprLength, humanReadable, spaceCount);
+			
+			if (reprLength > 0) {
+				// add the representation to our final string
+				LJ_AUTOREALLOC_IF_NEEDED(reprLength + 3, result, resultLength, resultSize)
+				
+				strcat(result, repr);
+				resultLength += reprLength;
+			}
+			
+			child = child->next;
+			
+			// don't forget to add a comma seperating other values if there
+			// are many of them
+			if (child)
+				result[resultLength++] = ',';
+			
+			// new line on each child item
+			if (humanReadable)
+				result[resultLength++] = '\n';
+		}
+		
+		spaceCount -= LJ_STRINGOPS_TABSIZE;
+		
+		// end the container too
+		LJ_AUTOREALLOC_IF_NEEDED(spaceCount + 1, result, resultLength, resultSize)
+		
+		if (humanReadable) {
+			// prepend the last few spaces before container end
+			for (json_index_t sc = 0; sc < spaceCount; sc++)
+				result[resultLength++] = ' ';
+		}
+		
+		result[resultLength++] = (root->type == JSON_TYPE_ARRAY) ? ']' : '}';
+	} else {
+		switch (root->type) {
+			case JSON_TYPE_STRING: {
+				// use its own quoted representation instead
+				free(result);
+				
+				result = lj_unescape_str(root->strV);
+				resultLength = result ? strlen(result) : 0;
+				break;
+			}
+			case JSON_TYPE_NUMBER:
+			case JSON_TYPE_BOOLEAN: {
+				// use its strV variant
+				free(result);
+				
+				result = strdup(root->strV);
+				resultLength = strlen(result);
+				break;
+			}
+			default: {
+				// use null string
+				strcpy(result, "null");
+				resultLength = strlen(result);
+				break;
+			}
+		}
+	}
+	
+	LJ_IF_NOT_NULL(lengthP, resultLength)
+	return result;
+}
+
+//
+// json_value_ref API - public
+//
+
+json_value_ref json_value_init_string(const char* str) {
+	if (!str) {
+		ljprintf("NULL string provided as input, cannot continue");
+		return NULL;
+	}
+	
+	json_value_ref result = json_value_init(JSON_TYPE_STRING);
+	json_value_set_string(result, str);
+	
+	return result;
+}
+
+json_value_ref json_value_init_number(const json_number_t num) {
+	json_value_ref result = json_value_init(JSON_TYPE_NUMBER);
+	json_value_set_number(result, num);
+	
+	return result;
+}
+
+json_value_ref json_value_init_boolean(const bool bv) {
+	json_value_ref result = json_value_init(JSON_TYPE_BOOLEAN);
+	json_value_set_boolean(result, bv);
+	
+	return result;
+}
+
+json_value_ref json_value_init_null() {
+	json_value_ref result = json_value_init(JSON_TYPE_NULL);
+	return result;
+}
+
+json_value_ref json_value_init_object() {
+	json_value_ref result = json_value_init(JSON_TYPE_OBJECT);
+	return result;
+}
+
+json_value_ref json_value_init_array() {
+	json_value_ref result = json_value_init(JSON_TYPE_ARRAY);
+	return result;
+}
+
+bool json_value_set_string(json_value_ref value, const char* str) {
+	if (!value || !str) {
+		ljprintf("value = <%p>, str = <%p>, something is NULL", value, str);
+		return false;
+	}
+	
+	// clean up previous values and set the appropriate type
+	LJ_CLEAN_PREVIOUS_VALUE(value)
+	value->type = JSON_TYPE_STRING;
+	
+	// set both string and numeric values
+	value->strV = strdup(str);
+	value->numV = ljatof(value->strV);
+	return true;
+}
+
+bool json_value_set_number(json_value_ref value, const json_number_t num) {
+	if (!value)
+		return false;
+		
+	LJ_CLEAN_PREVIOUS_VALUE(value)
+	value->type = JSON_TYPE_NUMBER;
+	
+	value->strV = ljftoa(value->numV);
+	value->numV = num;
+	return true;
+}
+
+bool json_value_set_boolean(json_value_ref value, const bool bv) {
+	if (!value)
+		return false;
+		
+	LJ_CLEAN_PREVIOUS_VALUE(value)
+	value->type = JSON_TYPE_BOOLEAN;
+	
+	value->strV = bv ? "true" : "false";
+	value->numV = bv;
+	return true;
+}
+
+void json_value_release_tree(json_value_ref value) {
+	if (!value)
+		return;
+		
+	ljprintf("value <%p> type = %u awaiting release (tree)", value, value->type);
+	
+	// cache referenced values first
+	json_value_ref child = value->child;
+	json_value_ref next = value->next;
+	
+	// release itself
+	json_value_release(value);
+	
+	// release all referenced children
+	json_value_release_tree(child);
+	// release all referenced neighboring items
+	json_value_release_tree(next);
+}
+
+json_value_ref json_value_get(const json_value_ref container,
+							  const char* key) {
+	if (!container || container->type != JSON_TYPE_OBJECT || !key) {
+		ljprintf("NULL cont./key or non-object specified as container <%p> [%u]", 
+				 container, container->type);
+		return NULL;
+	}
+	
+	// get the first stored item first
+	json_value_ref first = container->child;
+	json_value_ref result = json_value_find_by_key(first, key, NULL);
+	
+	return result;
+}
+
+json_value_ref json_value_get_first(const json_value_ref container) {
+	if (!container || !LJ_IS_CONTAINER(container))
+		return NULL; // non-containers have no first/last item
+		
+	return container->child;
+}
+
+json_value_ref json_value_get_last(const json_value_ref container) {
+	if (!container || !LJ_IS_CONTAINER(container))
+		return NULL;
+		
+	json_value_ref last = container->child;
+	last = json_value_get_neighbor(last, 0, true, NULL);
+	
+	return last;
+}
+
+json_value_ref json_value_get_at(const json_value_ref container,
+								 const json_index_t where) {
+	if (!container || !LJ_IS_CONTAINER(container))
+		return NULL; // unavailable
+		
+	json_value_ref found = json_value_get_neighbor(container->child,
+												   where, false, NULL);
+	return found;
+}
+
+json_index_t json_value_get_count(const json_value_ref container) {
+	if (!container)
+		return 0;
+	else if (!LJ_IS_CONTAINER(container))
+		return 1; // only one item, which is self
+	
+	json_index_t result = 0;
+	json_value_get_neighbor(container->child, 0, true, &result);
+	
+	return result;
+}
+
+bool json_value_set(const json_value_ref container, const char* key,
+					json_value_ref value) {
+	if (!container || !key || strlen(key) < 1 || 
+		container->type != JSON_TYPE_OBJECT) {
+		ljprintf("container <%p> or key <%p> is NULL or the former is not an object", 
+				 container, key);
+		return false;
+	}
+	
+	// get the last stored value if we have to append the new value
+	json_value_ref last = json_value_get_last(container);
+	
+	// find an item that is named the same to maybe replace it
+	json_value_ref foundBack = NULL;
+	json_value_ref found = json_value_find_by_key(container->child, key, &foundBack);
+	
+	if (found) {
+		// will be editing an existing value
+		json_value_ref foundNext = found->next;
+		
+		// clean up this one
+		found->next = NULL;
+		json_value_release_tree(found);
+		
+		// adjust the newly added item's neighbor
+		value->next = foundNext;
+		
+		if (foundBack)
+			foundBack->next = value;
+		
+		if (container->child == found)
+			container->child = found;
+	} else if (last)
+		last->next = value;
+	else
+		container->child = value;
+		
+	value->parent = container;
+	return true;
+}
+
+bool json_value_push(json_value_ref container, json_value_ref value) {
+	if (!container || container->type != JSON_TYPE_ARRAY) {
+		ljprintf("NULL or non-array container <%p> type = %u", container,
+				 container->type);
+		return false;
+	} else if (!value) {
+		ljprintf("NULL value specified");
+		return false;
+	}
+	
+	if (container->child) {
+		// link to last value
+		json_value_ref last = json_value_get_last(container);
+		
+		last->next = value;
+		value->parent = container;
+	} else {
+		container->child = value;
+		value->parent = container;
+	}
+	
+	return true;
+}
+
+char* json_value_stringify(const json_value_ref container,
+						   const bool humanReadable) {
+	if (!container) {
+		ljprintf("NULL root object provided");
+		return NULL;
+	}
+	
+	char* repr = json_value_make_string_repr(container, NULL, humanReadable, 0);
+	return repr;
+}
+
+void json_value_release(json_value_ref value) {
+	if (!value)
+		return;
+	
+	ljprintf("value <%p> type = %u key = \"%s\" awaiting release", 
+			 value, value->type, value->strV);
+	
+	// release the only few manually managed values
+	free(value->key);
+	free(value->strV);
+	
+	// release itself
+	free(value);
 }

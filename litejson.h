@@ -48,6 +48,47 @@ typedef struct {
 ///
 json_value_ref json_parse(const char* input, json_error* errorP);
 
+/// creates a new JSON string value with the specified contents (can't be NULL)
+json_value_ref json_value_init_string(const char* str);
+/// creates a new JSON numeric value with the specified number
+json_value_ref json_value_init_number(const json_number_t num);
+/// creates a new JSON boolean value
+json_value_ref json_value_init_boolean(const bool bv);
+
+/// creates a JSON null instance
+json_value_ref json_value_init_null(void);
+
+/// creates an empty JSON object
+json_value_ref json_value_init_object(void);
+/// creates an empty JSON array
+json_value_ref json_value_init_array(void);
+
+bool json_value_set_string(json_value_ref value, const char* str);
+bool json_value_set_number(json_value_ref value, const json_number_t num);
+bool json_value_set_boolean(json_value_ref value, const bool bv);
+
+json_value_ref json_value_get(const json_value_ref container,
+							  const char* key);
+bool json_value_set(const json_value_ref container, const char* key,
+					json_value_ref value);
+
+json_value_ref json_value_get_first(const json_value_ref container);
+json_value_ref json_value_get_last(const json_value_ref container);
+json_value_ref json_value_get_at(const json_value_ref container,
+								 const json_index_t where);
+
+bool json_value_push(json_value_ref container, json_value_ref value);
+
+bool json_value_remove_first(json_value_ref container);
+bool json_value_remove_last(json_value_ref container);
+bool json_value_remove_at(json_value_ref container,
+						  const json_index_t where);
+					
+json_index_t json_value_get_count(const json_value_ref container);
+
+char* json_value_stringify(const json_value_ref container,
+						   const bool humanReadable);
+
 void json_value_dump_tree(json_value_ref value, const json_index_t offset);
 
 /// releases the specified JSON value object and all of its affiliate values

@@ -9,7 +9,7 @@ void gen_pointing_arrow(const json_index_t offset) {
 }
 
 int main() {
-	const char* input = "{ \"hello\": null, \"world\": \"aboba\", \"foo\": { \"bar\": true, \"coffeeLove\": [\"espresso\", \"cappuchino\", {\"rating\": 5.0}] }, \"baz\": 1 }";
+	const char* input = "{ \"hello\": null, \"world\": \"aboba\", \"foo\": { \"bar\": true, \"coffeeLove\": [\"espresso\", \"cappuchino\", {\"rating\": 5}] }, \"baz\": 1 }";
 	
 	json_error result;
 	json_value_ref root = json_parse(input, &result);
@@ -24,7 +24,10 @@ int main() {
 		return 1;
 	}
 	
-	json_value_dump_tree(root, 0);
+	char* repr = json_value_stringify(root, false);
+	printf("repr:\n%s\n", repr);
+	
+	free(repr);
 	json_value_release_tree(root);
 	return 0;
 }
