@@ -9,27 +9,27 @@ else
 CFLAGS := -Os $(CFLAGS)
 endif
 
-TARGET = litejson
+CLI_TARGET = jsonedit
 LIB_TARGET = liblitejson.a
 
-TARGETS = main.o
+CLI_TARGETS = jsonedit.o
 LIB_TARGETS = litejson.o
 
 all: lib cli
 
 lib: $(LIB_TARGET)
-cli: $(TARGET)
+cli: $(CLI_TARGET)
 
-$(TARGET): $(LIB_TARGET) $(TARGETS)
-	$(CC) -o $(TARGET) $(TARGETS) -L. -llitejson
+$(CLI_TARGET): $(LIB_TARGET) $(CLI_TARGETS)
+	$(CC) -o $(CLI_TARGET) $(CLI_TARGETS) -L. -llitejson
 
 $(LIB_TARGET): $(LIB_TARGETS)
 	$(AR) crs $(LIB_TARGET) $(LIB_TARGETS)
 
-$(TARGETS) $(LIB_TARGETS):
+$(CLI_TARGETS) $(LIB_TARGETS):
 	$(CC) -c -o "$@" $(CFLAGS) $(shell basename "$@" .o).c
 
 clean: distclean
 
 distclean:
-	-rm -rf $(TARGET) $(LIB_TARGET) $(TARGETS) $(LIB_TARGETS) *.dSYM
+	-rm -rf $(CLI_TARGET) $(LIB_TARGET) $(CLI_TARGETS) $(LIB_TARGETS) *.dSYM
